@@ -1,0 +1,156 @@
+const deleteAllTweets = async () => {
+  const processed = new Set();
+  const selectors = {
+    tweet: '[data-testid="tweet"]',
+    article: 'article', // More reliable container in recent X UI
+    more: '[aria-label="More"][data-testid="caret"]',
+    menuItem: '[role="menuitem"]',
+    deleteConfirm: '[data-testid="confirmationSheetConfirm"]',
+    unretweet: '[data-testid="unretweet"]',
+    unretweetConfirm: '[data-testid="unretweetConfirm"]',
+    unlike: '[data-testid="unlike"]', // For likes tab if needed
+    loading: '[data-testid="circularSpinner"]', // To check for loading indicators
+  };
+
+  // Utility to wait for an element to exist using MutationObserver
+  const waitForElemToExist = async (selector) => {
+    return new Promise(resolve => {
+      if (document.querySelector(selector)) {
+        return resolve(document.querySelector(selector));
+      }
+      const observer = new MutationObserver(() => {
+        if (document.querySelector(selector)) {
+          resolve(document.querySelector(selector));
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+      });
+    });
+  };
+
+  // Randomized delay with jitter for realism and to avoid rate limits
+  const delay = async (ms) => {
+    const jitter = ms * 0.2;
+    const actual = ms + (Math.random() * jitter * 2 - jitter);
+    return new Promise(resolve => setTimeout(resolve, actual));
+  };
+
+  // Get unprocessed more buttons
+  const getButtons = () => 
+    Array.from(document.querySelectorAll(`${selectors.tweet} ${selectors.more}`))
+      .filter(b => !processed.has(b));
+
+  // Aggressive scroll to bottom
+  const scrollToEnd = async (times = 1) => {
+    for (let i = 0; i < times; i++) {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      await delay(500); // Quick scrolls to trigger load
+    }
+  };
+
+  // Check if page is still loading
+  const isLoading = () => !!document.querySelector(selectors.loading);
+
+  // Attempt to delete or unretweet a tweet
+  const attemptDelete = async (button) => {
+    try {
+      processed.add(button);
+      button.click();
+      await delay(150);
+
+      // Find delete option
+      const menuItems = Array.from(document.querySelectorAll(selectors.menuItem));
+      const deleteOption = menuItems.find(item => item.textContent.includes('Delete'));
+
+      if (deleteOption) {
+        deleteOption.click();
+        const confirm = await waitForElemToExist(selectors.deleteConfirm);
+        if (confirm) {
+          confirm.click();
+          await delay(1000);
+          return true;
+        }
+      }
+
+      // Handle unretweet
+      const tweet = button.closest(selectors.tweet) || button.closest(selectors.article);
+      const unretweetBtn = tweet?.querySelector(selectors.unretweet);
+      if (unretweetBtn) {
+        unretweetBtn.click();
+        const confirm = await waitForElemToExist(selectors.unretweetConfirm);
+        if (confirm) {
+          confirm.click();
+          await delay(1000);
+          return true;
+        }
+      }
+
+      // Optional: Handle unlike if on likes tab
+      const unlikeBtn = tweet?.querySelector(selectors.unlike);
+      if (unlikeBtn) {
+        unlikeBtn.click();
+        await delay(500);
+        return true;
+      }
+    } catch (err) {
+      console.error('Error attempting to delete/unretweet:', err);
+    }
+    return false;
+  };
+
+  // Main loop with improved loading detection
+  let delCount = 0;
+  let noNewCount = 0;
+  const maxNoNew = 5; // Break after this many consecutive no-new-buttons after scrolls
+
+  while (true) {
+    const buttons = getButtons();
+    if (buttons.length) {
+      noNewCount = 0; // Reset if we find buttons
+      for (const button of buttons) {
+        const success = await attemptDelete(button);
+        if (success) delCount++;
+        await delay(300);
+        if (delCount % 10 === 0) console.log(`Processed ${delCount} items so far.`);
+      }
+    } else {
+      console.log('No new buttons found, scrolling to load more...');
+      await scrollToEnd(3); // Scroll multiple times to ensure loading
+      await delay(3000);
+      while (isLoading()) {
+        console.log('Waiting for loading to finish...');
+        await delay(1000); // Wait extra if spinner is visible
+      }
+      if (!getButtons().length) {
+        noNewCount++;
+        console.log(`No new buttons after scroll, attempt ${noNewCount}/${maxNoNew}`);
+        if (noNewCount >= maxNoNew) break;
+      }
+    }
+
+    await delay(1500); // General cooldown
+  }
+
+  console.log(`All items processed in current tab (${delCount} total).`);
+
+  // Automatically switch to other tabs if on profile
+  const tabSelector = '[role="tablist"] > div > div > div > div > a';
+  const tabs = Array.from(document.querySelectorAll(tabSelector));
+  if (tabs.length > 1 && window.location.href.includes('/profile')) {
+    const tabNames = ['Posts', 'Replies', 'Media', 'Likes']; // Common tabs
+    for (let i = 1; i < tabs.length; i++) { // Start from 1 to skip current (Posts)
+      const tabText = tabs[i].textContent.trim();
+      if (tabNames.includes(tabText)) {
+        console.log(`Switching to ${tabText} tab...`);
+        tabs[i].click();
+        await delay(3000); // Wait for tab to load
+        await deleteAllTweets(); // Recurse for next tab
+      }
+    }
+  }
+};
+
+deleteAllTweets().catch(err => console.error('Script failed:', err));
