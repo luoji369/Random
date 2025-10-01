@@ -1,0 +1,107 @@
+const unfollowAll = async () => {
+  const processed = new Set();
+  const selectors = {
+    user: '[data-testid="cellInnerDiv"]', // Container for user cells
+    unfollow: '[data-testid$="-unfollow"]', // The unfollow buttons
+    confirm: '[data-testid="confirmationSheetConfirm"]', // Confirmation button
+    loading: '[data-testid="circularSpinner"]', // To check for loading indicators
+  };
+
+  // Utility to wait for an element to exist using MutationObserver
+  const waitForElemToExist = async (selector) => {
+    return new Promise(resolve => {
+      if (document.querySelector(selector)) {
+        return resolve(document.querySelector(selector));
+      }
+      const observer = new MutationObserver(() => {
+        if (document.querySelector(selector)) {
+          resolve(document.querySelector(selector));
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+      });
+    });
+  };
+
+  // Randomized delay with jitter for realism and to avoid rate limits
+  const delay = async (ms) => {
+    const jitter = ms * 0.2;
+    const actual = ms + (Math.random() * jitter * 2 - jitter);
+    return new Promise(resolve => setTimeout(resolve, actual));
+  };
+
+  // Get unprocessed unfollow buttons
+  const getButtons = () => 
+    Array.from(document.querySelectorAll(selectors.unfollow))
+      .filter(b => !processed.has(b));
+
+  // Aggressive scroll to bottom
+  const scrollToEnd = async (times = 1) => {
+    for (let i = 0; i < times; i++) {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      await delay(500); // Quick scrolls to trigger load
+    }
+  };
+
+  // Check if page is still loading
+  const isLoading = () => !!document.querySelector(selectors.loading);
+
+  // Attempt to unfollow a user
+  const attemptUnfollow = async (button) => {
+    try {
+      processed.add(button);
+      button.click();
+      await delay(150);
+
+      const confirm = await waitForElemToExist(selectors.confirm);
+      if (confirm) {
+        confirm.click();
+        await delay(1000);
+        return true;
+      }
+    } catch (err) {
+      console.error('Error attempting to unfollow:', err);
+    }
+    return false;
+  };
+
+  // Main loop with improved loading detection
+  let unfollowCount = 0;
+  let noNewCount = 0;
+  const maxNoNew = 5; // Break after this many consecutive no-new-buttons after scrolls
+
+  while (true) {
+    const buttons = getButtons();
+    if (buttons.length) {
+      noNewCount = 0; // Reset if we find buttons
+      for (const button of buttons) {
+        const success = await attemptUnfollow(button);
+        if (success) unfollowCount++;
+        await delay(300);
+        if (unfollowCount % 10 === 0) console.log(`Unfollowed ${unfollowCount} accounts so far.`);
+      }
+    } else {
+      console.log('No new unfollow buttons found, scrolling to load more...');
+      await scrollToEnd(3); // Scroll multiple times to ensure loading
+      await delay(3000);
+      while (isLoading()) {
+        console.log('Waiting for loading to finish...');
+        await delay(1000); // Wait extra if spinner is visible
+      }
+      if (!getButtons().length) {
+        noNewCount++;
+        console.log(`No new buttons after scroll, attempt ${noNewCount}/${maxNoNew}`);
+        if (noNewCount >= maxNoNew) break;
+      }
+    }
+
+    await delay(1500); // General cooldown
+  }
+
+  console.log(`All accounts unfollowed (${unfollowCount} total).`);
+};
+
+unfollowAll().catch(err => console.error('Script failed:', err));
