@@ -1,0 +1,101 @@
+const removeAllLikes = async () => {
+  const processed = new Set();
+  const selectors = {
+    tweet: '[data-testid="tweet"]',
+    article: 'article', // More reliable container in recent X UI
+    unlike: '[data-testid="unlike"]', // The liked heart button
+    loading: '[data-testid="circularSpinner"]', // To check for loading indicators
+  };
+
+  // Utility to wait for an element to exist using MutationObserver
+  const waitForElemToExist = async (selector) => {
+    return new Promise(resolve => {
+      if (document.querySelector(selector)) {
+        return resolve(document.querySelector(selector));
+      }
+      const observer = new MutationObserver(() => {
+        if (document.querySelector(selector)) {
+          resolve(document.querySelector(selector));
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+      });
+    });
+  };
+
+  // Randomized delay with jitter for realism and to avoid rate limits
+  const delay = async (ms) => {
+    const jitter = ms * 0.2;
+    const actual = ms + (Math.random() * jitter * 2 - jitter);
+    return new Promise(resolve => setTimeout(resolve, actual));
+  };
+
+  // Get unprocessed unlike buttons
+  const getButtons = () => 
+    Array.from(document.querySelectorAll(selectors.unlike))
+      .filter(b => !processed.has(b));
+
+  // Aggressive scroll to bottom
+  const scrollToEnd = async (times = 1) => {
+    for (let i = 0; i < times; i++) {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      await delay(500); // Quick scrolls to trigger load
+    }
+  };
+
+  // Check if page is still loading
+  const isLoading = () => !!document.querySelector(selectors.loading);
+
+  // Attempt to unlike a post
+  const attemptUnlike = async (button) => {
+    try {
+      processed.add(button);
+      button.click();
+      await delay(500); // Wait for the unlike action to complete
+      return true;
+    } catch (err) {
+      console.error('Error attempting to unlike:', err);
+      return false;
+    }
+  };
+
+  // Main loop with improved loading detection
+  let unlikeCount = 0;
+  let noNewCount = 0;
+  const maxNoNew = 5; // Break after this many consecutive no-new-buttons after scrolls
+
+  while (true) {
+    const buttons = getButtons();
+    if (buttons.length) {
+      noNewCount = 0; // Reset if we find buttons
+      for (const button of buttons) {
+        const success = await attemptUnlike(button);
+        if (success) unlikeCount++;
+        await delay(300);
+        if (unlikeCount % 10 === 0) console.log(`Unliked ${unlikeCount} items so far.`);
+      }
+    } else {
+      console.log('No new unlike buttons found, scrolling to load more...');
+      await scrollToEnd(3); // Scroll multiple times to ensure loading
+      await delay(3000);
+      while (isLoading()) {
+        console.log('Waiting for loading to finish...');
+        await delay(1000); // Wait extra if spinner is visible
+      }
+      if (!getButtons().length) {
+        noNewCount++;
+        console.log(`No new buttons after scroll, attempt ${noNewCount}/${maxNoNew}`);
+        if (noNewCount >= maxNoNew) break;
+      }
+    }
+
+    await delay(1500); // General cooldown
+  }
+
+  console.log(`All likes removed (${unlikeCount} total).`);
+};
+
+removeAllLikes().catch(err => console.error('Script failed:', err));
